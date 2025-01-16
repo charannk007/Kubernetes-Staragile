@@ -1,0 +1,237 @@
+######################################## Both in MasterNode and WorkerNode###############################
+#This is for the container runtime
+
+step1))))))))))))))))))))))))))))))))))))))))
+
+
+
+cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+net.ipv4.ip_forward = 1
+EOF
+sudo sysctl --system
+
+##############################################################################################
+
+######################################################### Installing Docker and ContainerD both in Master and Worker ###############################
+
+step2)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+
+
+# Add Docker's official GPG key:
+sudo apt-get update
+sudo apt-get install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add the repository to Apt sources:
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+
+sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+systemctl start docker
+systemctl restart containerd
+
+
+##########################################################################################
+
+step3))))))))))))))))
+
+edit
+
+/etc/containerd/config.toml --->>>>>>>>>>>>>>>>>>>  file and copy paste the script from the cgroup driver related to systemd 
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+    SystemdCgroup = true
+
+once again restart systemctl restart containerd
+ 
+
+
+################ Install Kubernetes both master and worker #############################################################3
+
+step4))))))))))))))))))))))))
+
+sudo apt-get install -y apt-transport-https ca-certificates curl gpg
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+sudo apt-get install -y kubelet kubeadm kubectl
+sudo apt-mark hold kubelet kubeadm kubectl
+
+###############################################################################################
+
+
+step5))))))))))))))))))))))))))))))))))))))
+
+Initialize control Plane
+
+ip addr show
+
+kubeadm init --apiserver-advertise-address=172.31.34.142(your IP address) --pod-network-cidr=10.244.0.0/16
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+you will get like this
+
+Your Kubernetes control-plane has initialized successfully!
+
+To start using your cluster, you need to run the following as a regular user:
+
+  mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+Alternatively, if you are the root user, you can run:
+
+  export KUBECONFIG=/etc/kubernetes/admin.conf
+
+You should now deploy a pod network to the cluster.
+Run "kubectl apply -f [podnetwork].yaml" with one of the options listed at:
+  https://kubernetes.io/docs/concepts/cluster-administration/addons/
+
+Then you can join any number of worker nodes by running the following on each as root:
+
+kubeadm join 172.31.34.142:6443 --token 2ui112.py6vgguvymkhnpqo \
+        --discovery-token-ca-cert-hash sha256:8070300dbab20825a61e038399e1aaca7e05256046224b8888493a6497eebbc7
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+step6)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+
+setup drivers
+
+kubectl apply -f https://github.com/weaveworks/weave/releases/download/v2.8.1/weave-daemonset-k8s.yaml --validate=false
+
+edit 
+--------------------->>>>>>>kubectl edit ds weave-net -n kube-system
+
+there
+
+copy paste the 
+
+------------>>>>>>>>>>>>>>
+- name: IPALLOC_RANGE
+  value: 10.244.0.0/16 (your Ip address)
+
+
+or use
+
+calcio related
+
+
+#############################################################################################################################
+
+step7))))))))))))))))
+
+restart kubelet and ssh in both master and worker
+sudo kubeadm join 172.31.34.142:6443 --token 2ui112.py6vgguvymkhnpqo --discovery-token-ca-cert-hash sha256:8070300dbab20825a61e038399e1aaca7e05256046224b8888493a6497eebbc7 --ignore-preflight-errors=all
+
+copy paste in worker node
+
+#########################################################################################################3
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+######################################C group drivers setup##################################################################################
+
+create a scriptfile.sh and paste and execute this..
+
+#!/bin/bash
+
+# Variables
+CGROUP_DRIVER="systemd"
+
+echo "Setting up cgroup driver as $CGROUP_DRIVER for Kubernetes..."
+
+# Step 1: Configure containerd
+echo "Configuring containerd..."
+sudo mkdir -p /etc/containerd
+containerd_config="/etc/containerd/config.toml"
+
+if [ ! -f "$containerd_config" ]; then
+  echo "Generating containerd config..."
+  containerd config default | sudo tee $containerd_config
+fi
+
+sudo sed -i "s/SystemdCgroup = .*/SystemdCgroup = true/" $containerd_config
+sudo systemctl restart containerd
+echo "Containerd configured with cgroup driver: $CGROUP_DRIVER"
+
+# Step 2: Configure Kubelet
+echo "Configuring Kubelet..."
+kubelet_config="/var/lib/kubelet/config.yaml"
+
+if [ -f "$kubelet_config" ]; then
+  sudo sed -i "s/^cgroupDriver: .*/cgroupDriver: $CGROUP_DRIVER/" $kubelet_config
+else
+  echo "cgroupDriver: $CGROUP_DRIVER" | sudo tee -a $kubelet_config
+fi
+
+kubelet_service="/etc/systemd/system/kubelet.service.d/10-kubeadm.conf"
+if [ -f "$kubelet_service" ]; then
+  sudo sed -i "s|--cgroup-driver=.*|--cgroup-driver=$CGROUP_DRIVER|" $kubelet_service
+else
+  echo "Kubelet systemd service file not found! Ensure kubeadm is installed and configured."
+  exit 1
+fi
+
+# Step 3: Restart services
+echo "Restarting services..."
+sudo systemctl daemon-reload
+sudo systemctl restart kubelet
+
+# Step 4: Verify configuration
+echo "Verifying configuration..."
+echo "Containerd cgroup driver:"
+grep -i "SystemdCgroup" $containerd_config
+
+echo "Kubelet cgroup driver:"
+kubectl describe node $(hostname) | grep "Cgroup Driver"
+
+echo "Cgroup driver setup completed successfully!"
+#############################################################################################################################
+
+
+
+
+
